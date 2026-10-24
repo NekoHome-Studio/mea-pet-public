@@ -66,8 +66,8 @@ def _set_probe(state: str, detail: str = "") -> None:
         _PROBE_DETAIL = detail
 
 
-def _import_torch():
-    """把 torch 真加载起来，冻结版走 ``torch/lib`` 重试。
+def _import_torch_locked():
+    """真装载 torch（调用方须持 ``_LOCK``），冻结版走 ``torch/lib`` 重试。
 
     探针与 ``_import_runtime`` **共用**这一条：两边判据不一致的话，探针会对
     "重试其实能救回来"的现场报假红——那正是本判据最不该犯的方向。
@@ -99,8 +99,23 @@ def _import_torch():
     return torch
 
 
+def _import_torch():
+    """把 torch 真加载起来——持 ``_LOCK`` 的唯一入口。
+
+    必须持锁：探针线程与 speak() 主线程可能**同时**走到这里（doctor 的 TTS
+    前置项排探针后，``--speech-latency`` 立刻起合成）。CPython 的每模块
+    import 锁只保证字节码层互斥；torch 的装载还含原生 DLL 初始化（c10.dll
+    DllMain + OpenMP 运行时），Windows 冻结进程里两线程同时初始化同一批 DLL
+    的实测形状是 0xC0000409 fastfail（2026-10-24 冻结包实测：探针线程与主
+    线程同秒并发 import torch，进程原地消失、无任何 Python 异常）。锁让两个
+    入口串行，后到者在 torch 已入 sys.modules 后拿到即时结论。
+    """
+    with _LOCK:
+        return _import_torch_locked()
+
+
 def _import_torch_for_probe() -> None:
-    """探针的判据面：真 import 一次，与合成路径同一条装载逻辑。"""
+    """探针的判据面：真 import 一次，与合成路径同一条装载逻辑（经持锁入口）。"""
     _import_torch()
 
 

@@ -70,6 +70,41 @@ warning**，不会静默换音色。
 完整判据表、全部配置键与实测读数见
 [`docs/tts-vits-routing.zh-CN.md`](tts-vits-routing.zh-CN.md)。
 
+### VITS 进程内报 `WinError 1114`（c10.dll 初始化失败）
+
+症状：日志里 `VITS in-process exception: OSError: [WinError 1114]`，
+体检却报绿（或修复后的版本会报红并写明 `torch 寻得到但加载不起来`）。
+
+根因（2026-10-24 判别实验钉死）：PyQt5 的 wheel 往 `Qt5\bin` 里塞了一份
+2018 年的 MSVC 运行时（14.26）。冻结进程里 PyQt5 先加载，Qt5Core 把这份旧
+`msvcp140.dll` 先装进进程；之后 VITS 懒加载 torch 时，`c10.dll`（VS2022
+工具链构建）在这份 2018 CRT 的进程环境里 DllMain 初始化失败 ⇒ `WinError 1114`。
+同机九模式对照实验：凡进程内 MSVCP140 是 14.26 的场合 torch 必死；换成包根
+14.44 / 系统 14.51 全绿。这份旧 CRT 是 Qt 5.15.2 起官方就不再随包分发的
+（QTBUG-85833），本不该出现在冻结包里。
+
+处置：2026-10-24 起 `MeaPet.spec` 的 `filter_qtbin_crts` 会在构建时把这 4 个
+旧 CRT 从 `PyQt5\Qt5\bin` 摘掉，Qt5Core 的依赖自然回落到 `_internal` 根的
+新版（向上兼容）。**用此之后的构建包不再出现此故障**；旧包的绕行方案是配
+`tts.vits_python` 指向一个装了 torch 的真解释器（子进程路线不加载 PyQt5，
+不受影响）。
+
+### VITS 进程内合成报 `ModuleNotFoundError`（unidecode / cn2an 等文本前端包）
+
+2026-10-24 前的包还叠着第二层问题：`vits_core` 虽然整目录落盘随包，但它的
+**文本前端依赖**（unidecode/cn2an/pypinyin/opencc/inflect/eng_to_ipa/jamo/
+ko_pron/indic_transliteration/num_thai）没有被 PyInstaller 收进包——
+`vits_core` 走 datas 通道，依赖分析不扫它。修完 CRT 后这层就会露头：
+torch 加载成功、`import text` 阶段死在 `ModuleNotFoundError: unidecode`。
+
+2026-10-24 起 spec 把这 10 个包列进 hiddenimports，构建环境装上即随包。
+**pyopenjtalk 是已知例外**：其 `pyopenjtalk-prebuilt` 轮子只发到 cp311，
+Python 3.13 的构建环境装不上；而 `vits_core/text/cleaners.py` 是模块级
+全量 import，ja 前端缺席 ⇒ 进程内路整条不可用（连 zh 句也会死，因为
+cleaners 顶部先 import 日文支）。所以 **3.13 构建的包里进程内 VITS 仍不可用**，
+正确姿势是配 `tts.vits_python` 指向 3.10/3.11 建的 VITS 环境走子进程路
+（`vits_requirements.txt` 顶部有同款说明）；上游发 cp312+ 轮子后此边界消失。
+
 ## 气泡不跟着桌宠（平铺桌面）
 
 在平铺式窗口管理器下（实测环境：Linux + niri），回复气泡不会贴着桌宠出现，而是落在屏幕

@@ -491,3 +491,44 @@ def test_speak_path_is_not_taxed_by_the_full_stack_probe():
 
     assert call_lines("meapet/tts/service.py") == []
     assert call_lines("wizard/page_tts_vits.py"), "就绪判据得有人真的去问"
+
+
+class TestConcurrentTorchImportSerialized:
+    """探针线程与合成线程并发 import torch 必须串行（2026-10-24 冻结包 fastfail 的回归锁）。
+
+    冻结包实测：doctor 的 TTS 前置项排后台探针后，`--speech-latency` 立刻起
+    合成，两线程同秒并发走 torch 装载，进程 0xC0000409 原地消失（无任何 Python
+    异常）。修复是 `_import_torch` 持 `_LOCK` 串行化。这里用假装载体验证
+    接线：主线程占住装载时，第二线程必须被挡在锁外；放行后两边都拿到结论。
+    """
+
+    def test_second_thread_waits_for_lock(self) -> None:
+        import threading as _th
+        from unittest import mock as _mock
+
+        from meapet.tts.engines import vits_runtime as vr
+
+        entered: list[int] = []
+        active = _th.Semaphore(0)
+        release = _th.Semaphore(0)
+
+        def fake_locked():
+            entered.append(1)
+            if len(entered) == 1:
+                active.release()
+                assert release.acquire(timeout=5), "主线程等不到放行"
+
+        with _mock.patch.object(vr, "_import_torch_locked", fake_locked):
+            t1 = _th.Thread(target=vr._import_torch)
+            t1.start()
+            assert active.acquire(timeout=5), "装载线程没进入假件"
+            t2 = _th.Thread(target=vr._import_torch)
+            t2.start()
+            t2.join(timeout=2)
+            assert len(entered) == 1, (
+                f"第二线程在锁外进了装载体（未串行）：entered={len(entered)}"
+            )
+            release.release()
+            t1.join(timeout=5)
+            t2.join(timeout=5)
+            assert not (t1.is_alive() or t2.is_alive())

@@ -1200,5 +1200,38 @@ class EntryRoutingTest(unittest.TestCase):
         install.assert_called_once()
 
 
+class DoctorConsoleEncodingTest(unittest.TestCase):
+    """GBK 控制台不得把整个 doctor 崩掉（2026-10-24 Windows 冻结包实测的形状）。
+
+    症状：`--doctor` 在 chcp 936 的控制台跑完所有探测后，render/print 阶段
+    `UnicodeEncodeError: 'gbk' codec can't encode character '\u21d2'`——
+    一份读数都带不走。修复是 `_reconfigure_console_utf8()` 在 main 顶部把
+    stdout/stderr 配成 UTF-8+replace。钉两条：有 reconfigure 的真流会被配；
+    没有该 API 的流（pytest 的 StringIO 替身等）不炸、不动。
+    """
+
+    def test_reconfigure_sets_utf8_on_real_streams(self) -> None:
+        import io
+        import tempfile
+
+        with tempfile.TemporaryFile(mode="w+b") as raw:
+            text_stream = io.TextIOWrapper(raw, encoding="gbk")
+            with mock.patch.object(sys, "stdout", text_stream):
+                doctor._reconfigure_console_utf8()
+                self.assertEqual(
+                    (text_stream.encoding or "").lower().replace("-", ""), "utf8"
+                )
+                # 箭头字符必须写得进去（旧形状在这里 UnicodeEncodeError）
+                text_stream.write("\u21d2 \u00b7 ok\n")
+                text_stream.flush()
+                text_stream.seek(0)
+                self.assertIn("\u21d2", text_stream.read())
+
+    def test_reconfigure_tolerates_streams_without_the_api(self) -> None:
+        fake = io.StringIO()
+        with mock.patch.object(sys, "stdout", fake), mock.patch.object(sys, "stderr", fake):
+            doctor._reconfigure_console_utf8()  # 不得抛
+
+
 if __name__ == "__main__":
     unittest.main()

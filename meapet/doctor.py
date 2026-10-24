@@ -1265,8 +1265,27 @@ def render_text(items: list[Item], elapsed: float) -> str:
     return "\n".join(lines)
 
 
+def _reconfigure_console_utf8() -> None:
+    """把本进程的 stdout/stderr 配成 UTF-8（编码错误替换，不炸）。
+
+    取证读数面向「整块贴回来给维护者/AI」，箭头、间隔号这类字符在 GBK 控制台
+    （chcp 932/936 的 Windows 默认）打不出 ⇒ 旧形状是 UnicodeEncodeError 直接
+    崩掉整个 doctor，一份读数都带不走。errors="replace" 只影响显示保真，不影响
+    --doctor-format json 的机器面（json.dumps 本就 ensure_ascii=False + UTF-8）。
+    只在真控制台上动；pytest 捕获的 StringIO/NullStream 不动（reconfigure 也没实现）。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconf = getattr(stream, "reconfigure", None)
+        if callable(reconf):
+            try:
+                reconf(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(list(argv if argv is not None else sys.argv[1:]))
+    _reconfigure_console_utf8()
     from meapet.config.store import load_config
 
     # 产品侧那些函数里有直接 print 的（`wayland_layer.is_available()` 就是）。
