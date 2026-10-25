@@ -103,6 +103,7 @@ scripts/rust_layer_probe/target/
 
 # AI/编辑器本地会话与偏好（含私有 sessions/，不入库）
 .qoder/
+.claude/
 
 # 调试 / 验证脚本（可选保留，视团队习惯）
 /test_layer_pixels.py
