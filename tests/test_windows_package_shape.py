@@ -145,14 +145,35 @@ def test_spec_filters_qtbin_old_crts(tmp_path):
     assert any("qwindows.dll" in n for n in names)
 
 
+def _load_filter_fn():
+    """执行 spec 顶段（Analysis 之前），返回 filter_qtbin_crts。
+
+    必须补齐 _run_spec 同款环境，否则在没装 PyInstaller 的机器（CI 全部
+    runner 都不装它——那是构建工具不是运行依赖）上 head-exec 直接
+    ModuleNotFoundError；必须钉 win32 档，否则真 Linux runner 上 spec 的
+    fidus 在场性闸门会 SystemExit（那道闸是给 Linux 构建机看的）。
+    """
+    hooks = types.ModuleType("PyInstaller.utils.hooks")
+    hooks.collect_data_files = lambda pkg: []
+    utils = types.ModuleType("PyInstaller.utils")
+    utils.hooks = hooks
+    pkgroot = types.ModuleType("PyInstaller")
+    pkgroot.utils = utils
+    ns = {"SPECPATH": str(REPO_ROOT)}
+    head = SPEC_FILE.read_text(encoding="utf-8").split("a = Analysis(")[0]
+    with mock.patch.dict(
+        sys.modules,
+        {"PyInstaller": pkgroot, "PyInstaller.utils": utils, "PyInstaller.utils.hooks": hooks},
+    ), mock.patch.object(sys, "platform", "win32"), mock.patch(
+        "importlib.util.find_spec", lambda name: object()
+    ):
+        exec(compile(head, "spec-head", "exec"), ns)
+    return ns["filter_qtbin_crts"]
+
+
 def test_crt_filter_leaves_non_qtbin_paths_alone():
     """过滤器只认 (Qt5\\bin 前缀, 那 4 个文件名) 的组合；别处同名文件不动。"""
-    ns = {"SPECPATH": str(REPO_ROOT)}  # spec 顶部 _layer_shim 那行要用
-    src = SPEC_FILE.read_text(encoding="utf-8")
-    # 只取 spec 顶部的常量与函数（在 IS_LINUX 定义之后、Analysis 之前截断）
-    head = src.split("a = Analysis(")[0]
-    exec(compile(head, "spec-head", "exec"), ns)
-    filt = ns["filter_qtbin_crts"]
+    filt = _load_filter_fn()
     binaries = [
         ("PyQt5\\Qt5\\bin\\msvcp140.dll", "s", "BINARY"),
         ("PyQt5\\Qt5\\plugins\\platforms\\qwindows.dll", "s", "BINARY"),
@@ -174,10 +195,7 @@ def test_crt_filter_leaves_non_qtbin_paths_alone():
 
 def test_crt_filter_handles_forward_slashes():
     """PyInstaller 在不同版本/平台用正斜杠或反斜杠记 dest——两种都要摘。"""
-    ns = {"SPECPATH": str(REPO_ROOT)}
-    head = SPEC_FILE.read_text(encoding="utf-8").split("a = Analysis(")[0]
-    exec(compile(head, "spec-head", "exec"), ns)
-    filt = ns["filter_qtbin_crts"]
+    filt = _load_filter_fn()
     kept = filt([
         ("PyQt5/Qt5/bin/msvcp140.dll", "s", "BINARY"),
         ("PyQt5/Qt5/bin/VCRUNTIME140.dll", "s", "BINARY"),
